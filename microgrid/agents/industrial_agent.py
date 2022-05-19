@@ -25,8 +25,8 @@ class IndustrialAgent:
         
         # récupération des données #
         
-        l_dem = state.get("consumption_prevision")
-        prix = manager_signal = state.get("manager_signal")
+        l_dem = state[´conso_prevision’]
+        prix = manager_signal = state[‘manager_signal’]
         
         # problème linéaire et résolution
         
