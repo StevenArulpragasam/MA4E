@@ -1,6 +1,6 @@
 import datetime
 from microgrid.environments.charging_station.charging_station_env import ChargingStationEnv
-
+import pulp
 
 class ChargingStationAgent:
     def __init__(self, env: ChargingStationEnv):
@@ -11,6 +11,16 @@ class ChargingStationAgent:
                       previous_state=None,
                       previous_action=None,
                       previous_reward=None):
+
+        # On a essayé avec une fonction indic pour les pénalités, mais cela marchait sur le script spyder
+        # mais ici les résultats n'étaient pas cohérents...
+
+       # def indic(j):
+        #    if a<=0.5*self.env.evs[j - 1].battery.pmax:
+         #       return 1
+         #   else:
+          #      return 0
+
         nbvoitures = self.env.nb_evs
         T = self.env.nb_pdt
         dt = self.env.delta_t / datetime.timedelta(hours=1)
@@ -20,6 +30,8 @@ class ChargingStationAgent:
         lambdaa = state["manager_signal"]
         a_initial = state["soc"]
         l = {}
+        lpos = {}
+        lneg = {}
         a = {}
         penalite = {}
 
@@ -48,21 +60,29 @@ class ChargingStationAgent:
         lp = pulp.LpProblem("charging_station" + ".lp", pulp.LpMinimize)
         lp.setSolver()
 
+
+
         # Création des variables
         for j in range(1, nbvoitures):
             l[j] = {}
             a[j] = {}
+            lneg[j] = {}
+            lpos[j] = {}
             penalite[j] = {}
-            for (i, p) in enumerate(t_dep_arr[j - 1]):
-                var_name = "fined_" + str(j) + '_' + str(i)
+            for (i) in range(len((t_dep_arr[j - 1]))):
+                var_name = "penalité_" + str(j) + '_' + str(i)
                 penalite[j][i] = pulp.LpVariable(var_name, cat="Binary")  # booléen pour savoir si pénalité il y a
             for t in range(1, T):
                 var_name = "l_" + str(j) + "_" + str(t)
-                l[j][t] = pulp.LpVariable(var_name, self.env.evs[j - 1].battery.pmin,
-                                          self.env.evs[j - 1].battery.pmax)  # puissance pour j à t
+                l[j][t] = pulp.LpVariable(var_name, self.env.evs[j - 1].battery.pmin,self.env.evs[j - 1].battery.pmax)  # puissance pour j à t
+                var_name = "l_neg" + str(j) + "_" + str(t)
+                lneg[j][t] = pulp.LpVariable(var_name, 0)
+                var_name = "l_pos" + str(j) + "_" + str(t)
+                lpos[j][t] = pulp.LpVariable(var_name, 0)
                 var_name = "a_" + str(j) + "_" + str(t)
-                a[j][t] = pulp.LpVariable(var_name, 0.,
-                                          self.env.evs[j - 1].battery.capacity)  # état batterie j au temps t
+                a[j][t] = pulp.LpVariable(var_name, 0.,self.env.evs[j - 1].battery.capacity)  # état batterie j au temps t
+
+
 
         # CONTRAINTES
         for t in range(1, T):
@@ -75,40 +95,46 @@ class ChargingStationAgent:
         for j in range(1, nbvoitures):
             if t_dep_arr[j - 1] != []:  # S'il y a un départ pour la voiture j
                 for (i, p) in enumerate(t_dep_arr[j - 1]):
-
-                    const_name = "recharge minimum" + str(j) + "_" + str(i)
-                    lp += (a[j][p[0]] >= self.env.evs[j - 1].battery.capacity * 0.25 * (1 - penalite[j][i])), const_name
+                    tdep=p[0]
+                    tarr=p[1]
 
                     const_name = "énergie minimum" + str(j) + '_' + str(i)  # as-t-on assez d'énergie ?
-                    lp += a[j][p[0]] >= 4, const_name
+                    lp += a[j][tdep] >= 4, const_name
 
                     if p[-1] != None:
                         const_name = "consommation" + str(j) + "_" + str(p[1]) + "_" + str(i)
-                        lp += (a[j][p[1]] == a[j][p[0]] - 4), const_name
+                        lp += (a[j][tarr] == a[j][p[0]] - 4), const_name
 
                         # relation entre les états de la batterie
                         const_name = "evolution" + str(j) + '_' + str(p[1])
-                        lp += (a[j][p[1] + 1] == a[j][p[1]] + self.env.evs[j - 1].battery.efficiency * l[j][
-                            p[1]] * dt), const_name
+                        lp += (a[j][tarr + 1] == a[j][p[1]] + self.env.evs[j - 1].battery.efficiency * l[j][tarr] * dt), const_name
 
             # état de charge initial
             const_name = "initial_state_ev_" + str(j)
             lp += (a[j][t_ini[j - 1]] == a_initial[j - 1]), const_name
 
+
+
+            for j in range(1,nbvoitures):
+                for t in range(1,T):
+                    lp += (l[j][t] == lpos[j][t]-lneg[j][t])
+
             for t in range(1, T):
                 if not (state["is_plugged_prevision"][j - 1][t - 1]):  # pas en charge
-
-                    const_name = "away_from_charging_station_" + str(j) + "_" + str(t)
-                    lp += l[j][t] == 0., const_name
+                    const_name1 = "away_from_charging_station_" + str(j) + "_" + str(t)
+                    lp += l[j][t] == 0 , const_name1
                 else:
-                    if t < T - 1:
+                    if t+1 < T:
                         const_name = "evolution_state_" + str(j) + '_' + str(t)
-                        lp += (a[j][t + 1] == a[j][t] + self.env.evs[j - 1].battery.efficiency * l[j][
-                            t] * 0.5), const_name
+                        lp += (a[j][t+1] == a[j][t] + self.env.evs[j-1].battery.efficiency * lpos[j][t] * dt-lneg[j][t]*dt), const_name
 
-        lp.setObjective(pulp.lpSum(
-            pulp.lpSum(l[j][t] * lambdaa[t - 1] for j in range(1, nbvoitures)) for t in range(1, T)) + pulp.lpSum(
-            pulp.lpSum(penalite[j][i] for i in range(len(t_dep_arr[j - 1]))) for j in range(1, nbvoitures)) * penalité)
+
+        lp.setObjective(pulp.lpSum(pulp.lpSum(l[j][t]*lambdaa[t-1] for j in range(1,nbvoitures)) for t in range(1,T))+pulp.lpSum(pulp.lpSum(penalite[j][i] for i in range(len(t_dep_arr[j-1]))) for j in range(1,nbvoitures))*penalité)
+
+        #on avait également pensé à mettre une fonction objective avec notre fonction indic
+        #lp.setObjective(pulp.lpSum(
+        #    pulp.lpSum(l[j][t] * lambdaa[t - 1] for j in range(1, nbvoitures)) for t in range(1, T)) + pulp.lpSum(
+        #    pulp.lpSum(indic(a[i][T]) for i in range(len(t_dep_arr[j - 1]))) for j in range(1, nbvoitures)) * penalité)
 
         lp.solve()
         sol = self.env.action_space.sample()
@@ -116,7 +142,7 @@ class ChargingStationAgent:
         for j in range(0, nbvoitures - 1):
             for t in range(0, T - 1):
                 sol[j][t] = l[j + 1][t + 1].varValue
-
+        print(sol)
         return (sol)
 
 
