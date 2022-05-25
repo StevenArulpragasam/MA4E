@@ -36,7 +36,7 @@ class ChargingStationEnv(gym.Env):
         high = np.array([[ev.battery.pmax for ev in self.evs] for _ in range(nb_pdt)]).transpose()
         self.action_space = spaces.Box(low=low, high=high, shape=(self.nb_evs, nb_pdt))
         self.now = None
-        self.delta_t = None
+        self.delta_t = 0.5
         self.n_coord_step = None
 
     def step(self, action: ActType) -> Tuple[ObsType, float, bool, dict]:
